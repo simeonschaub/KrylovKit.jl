@@ -554,3 +554,379 @@ and its concrete subtypes [`ClassicalGramSchmidt`](@ref), [`ModifiedGramSchmidt`
 [`ClassicalGramSchmidtIR`](@ref) and [`ModifiedGramSchmidtIR`](@ref).
 """
 orthonormalize, orthonormalize!!
+
+# Definition of a symplectic (Darboux) basis
+"""
+    SymplecticBasis{T} <: Basis{T}
+
+A list of vector like objects of type `T` that form a symplectic (Darboux) basis with
+respect to a skew-symmetric bilinear form `ω`. A symplectic basis satisfies the relations
+`ω(u_{2m-1}, u_{2n}) = δ_{mn}`, `ω(u_{2m}, u_{2n}) = 0`, and `ω(u_{2m-1}, u_{2n-1}) = 0`.
+See also [`Basis`](@ref).
+
+Skew-orthonormality of the vectors contained in an instance `b` of `SymplecticBasis` is not
+checked when elements are added; it is up to the algorithm that constructs `b` to guarantee
+skew-orthonormality.
+
+Vectors are added in pairs: odd-indexed vectors `u_{2m-1}` and their symplectic partners
+`u_{2m}`. The function [`skeworthogonalize`](@ref) or [`skeworthonormalize`](@ref) can be
+used to skew-orthogonalize a new vector with respect to the existing basis. These functions
+require a skew-symmetric form `ω` to be provided. Note that in-place versions
+[`skeworthogonalize!!`](@ref) or [`skeworthonormalize!!`](@ref) are also available.
+"""
+struct SymplecticBasis{T} <: Basis{T}
+    basis::Vector{T}
+end
+SymplecticBasis{T}() where {T} = SymplecticBasis{T}(Vector{T}(undef, 0))
+
+# Iterator methods for SymplecticBasis
+Base.IteratorSize(::Type{<:SymplecticBasis}) = Base.HasLength()
+Base.IteratorEltype(::Type{<:SymplecticBasis}) = Base.HasEltype()
+
+Base.length(b::SymplecticBasis) = length(b.basis)
+Base.eltype(b::SymplecticBasis{T}) where {T} = T
+
+Base.iterate(b::SymplecticBasis) = Base.iterate(b.basis)
+Base.iterate(b::SymplecticBasis, state) = Base.iterate(b.basis, state)
+
+Base.getindex(b::SymplecticBasis, i) = getindex(b.basis, i)
+Base.setindex!(b::SymplecticBasis, i, q) = setindex!(b.basis, i, q)
+Base.firstindex(b::SymplecticBasis) = firstindex(b.basis)
+Base.lastindex(b::SymplecticBasis) = lastindex(b.basis)
+
+Base.first(b::SymplecticBasis) = first(b.basis)
+Base.last(b::SymplecticBasis) = last(b.basis)
+
+Base.popfirst!(b::SymplecticBasis) = popfirst!(b.basis)
+Base.pop!(b::SymplecticBasis) = pop!(b.basis)
+Base.push!(b::SymplecticBasis{T}, q::T) where {T} = (push!(b.basis, q); return b)
+Base.empty!(b::SymplecticBasis) = (empty!(b.basis); return b)
+Base.sizehint!(b::SymplecticBasis, k::Int) = (sizehint!(b.basis, k); return b)
+Base.resize!(b::SymplecticBasis, k::Int) = (resize!(b.basis, k); return b)
+
+"""
+    numpairs(b::SymplecticBasis) -> Int
+
+Return the number of symplectic pairs in the basis `b`. This equals `div(length(b), 2)`.
+"""
+numpairs(b::SymplecticBasis) = div(length(b), 2)
+
+# Skew-orthogonalization of a vector against a given SymplecticBasis
+skeworthogonalize(v, ω, args...) = skeworthogonalize!!(scale(v, true), ω, args...)
+skeworthogonalize(v, b::SymplecticBasis, args...) = skeworthogonalize(v, inner, b, args...)
+skeworthogonalize!!(v, b::SymplecticBasis, args...) = skeworthogonalize!!(v, inner, b, args...)
+
+function skeworthogonalize!!(
+        v::T, ω, b::SymplecticBasis{T}, alg::SkewOrthogonalizer
+    ) where {T}
+    S = promote_type(scalartype(v), scalartype(T))
+    # Coefficients: for each pair (u_{2m-1}, u_{2m}), we store two coefficients
+    # c[2m-1] = ω(u_{2m}, v) (coefficient for subtracting u_{2m-1})
+    # c[2m] = ω(u_{2m-1}, v) (coefficient for subtracting u_{2m})
+    c = Vector{S}(undef, length(b))
+    return skeworthogonalize!!(v, ω, b, c, alg)
+end
+
+# Classical Symplectic Gram-Schmidt: project all at once
+# For a symplectic basis with ω(u_{2m-1}, u_{2m}) = 1, to make w satisfy:
+#   ω(u_{2m-1}, w) = 0 and ω(u_{2m}, w) = 0
+# We want: w = v + α·u_{2m-1} + β·u_{2m}
+# Condition 1: ω(u_{2m-1}, w) = 0
+#   ω(u_{2m-1}, v) + α·ω(u_{2m-1}, u_{2m-1}) + β·ω(u_{2m-1}, u_{2m}) = 0
+#   ω(u_{2m-1}, v) + 0 + β·1 = 0  =>  β = -ω(u_{2m-1}, v)
+# Condition 2: ω(u_{2m}, w) = 0
+#   ω(u_{2m}, v) + α·ω(u_{2m}, u_{2m-1}) + β·ω(u_{2m}, u_{2m}) = 0
+#   ω(u_{2m}, v) + α·(-1) + 0 = 0  =>  α = ω(u_{2m}, v)
+# So: w = v + ω(u_{2m}, v)·u_{2m-1} - ω(u_{2m-1}, v)·u_{2m}
+function skeworthogonalize!!(
+        v::T, ω, b::SymplecticBasis{T}, x::AbstractVector, ::ClassicalSymplecticGramSchmidt
+    ) where {T}
+    np = numpairs(b)
+    for m in 1:np
+        i_odd = 2m - 1
+        i_even = 2m
+        x[i_odd] = ω(b[i_even], v)   # coeff for adding u_{2m-1}
+        x[i_even] = ω(b[i_odd], v)   # coeff for subtracting u_{2m}
+    end
+    for m in 1:np
+        i_odd = 2m - 1
+        i_even = 2m
+        v = add!!(v, b[i_odd], x[i_odd])
+        v = add!!(v, b[i_even], -x[i_even])
+    end
+    return (v, x)
+end
+
+function reskeworthogonalize!!(
+        v::T, ω, b::SymplecticBasis{T}, x::AbstractVector, ::ClassicalSymplecticGramSchmidt
+    ) where {T}
+    s = similar(x) ## EXTRA ALLOCATION
+    np = numpairs(b)
+    for m in 1:np
+        i_odd = 2m - 1
+        i_even = 2m
+        s[i_odd] = ω(b[i_even], v)
+        s[i_even] = ω(b[i_odd], v)
+    end
+    for m in 1:np
+        i_odd = 2m - 1
+        i_even = 2m
+        v = add!!(v, b[i_odd], s[i_odd])
+        v = add!!(v, b[i_even], -s[i_even])
+    end
+    x[1:length(b)] .+= s[1:length(b)]
+    return (v, x)
+end
+
+function skeworthogonalize!!(
+        v::T, ω, b::SymplecticBasis{T}, x::AbstractVector, ::ClassicalSymplecticGramSchmidt2
+    ) where {T}
+    (v, x) = skeworthogonalize!!(v, ω, b, x, ClassicalSymplecticGramSchmidt())
+    return reskeworthogonalize!!(v, ω, b, x, ClassicalSymplecticGramSchmidt())
+end
+
+function skeworthogonalize!!(
+        v::T, ω, b::SymplecticBasis{T}, x::AbstractVector, alg::ClassicalSymplecticGramSchmidtIR
+    ) where {T}
+    nold = norm(v)
+    (v, x) = skeworthogonalize!!(v, ω, b, x, ClassicalSymplecticGramSchmidt())
+    nnew = norm(v)
+    while eps(one(nnew)) < nnew < alg.η * nold
+        nold = nnew
+        (v, x) = reskeworthogonalize!!(v, ω, b, x, ClassicalSymplecticGramSchmidt())
+        nnew = norm(v)
+    end
+    return (v, x)
+end
+
+# Modified Symplectic Gram-Schmidt: project pair by pair
+function skeworthogonalize!!(
+        v::T, ω, b::SymplecticBasis{T}, x::AbstractVector, ::ModifiedSymplecticGramSchmidt
+    ) where {T}
+    np = numpairs(b)
+    for m in 1:np
+        i_odd = 2m - 1
+        i_even = 2m
+        # Project out the m-th symplectic pair
+        s_odd = ω(b[i_even], v)   # ω(u_{2m}, v)
+        v = add!!(v, b[i_odd], s_odd)
+        s_even = ω(b[i_odd], v)   # ω(u_{2m-1}, v) (after modifying v)
+        v = add!!(v, b[i_even], -s_even)
+        x[i_odd] = s_odd
+        x[i_even] = s_even
+    end
+    return (v, x)
+end
+
+function reskeworthogonalize!!(
+        v::T, ω, b::SymplecticBasis{T}, x::AbstractVector, ::ModifiedSymplecticGramSchmidt
+    ) where {T}
+    np = numpairs(b)
+    for m in 1:np
+        i_odd = 2m - 1
+        i_even = 2m
+        s_odd = ω(b[i_even], v)
+        v = add!!(v, b[i_odd], s_odd)
+        s_even = ω(b[i_odd], v)
+        v = add!!(v, b[i_even], -s_even)
+        x[i_odd] += s_odd
+        x[i_even] += s_even
+    end
+    return (v, x)
+end
+
+function skeworthogonalize!!(
+        v::T, ω, b::SymplecticBasis{T}, x::AbstractVector, ::ModifiedSymplecticGramSchmidt2
+    ) where {T}
+    (v, x) = skeworthogonalize!!(v, ω, b, x, ModifiedSymplecticGramSchmidt())
+    return reskeworthogonalize!!(v, ω, b, x, ModifiedSymplecticGramSchmidt())
+end
+
+function skeworthogonalize!!(
+        v::T, ω, b::SymplecticBasis{T}, x::AbstractVector, alg::ModifiedSymplecticGramSchmidtIR
+    ) where {T}
+    nold = norm(v)
+    (v, x) = skeworthogonalize!!(v, ω, b, x, ModifiedSymplecticGramSchmidt())
+    nnew = norm(v)
+    while eps(one(nnew)) < nnew < alg.η * nold
+        nold = nnew
+        (v, x) = reskeworthogonalize!!(v, ω, b, x, ModifiedSymplecticGramSchmidt())
+        nnew = norm(v)
+    end
+    return (v, x)
+end
+
+# Skew-orthogonalization of a vector against a single symplectic pair (u_odd, u_even)
+skeworthogonalize!!(v::T, ω, q_odd::T, q_even::T, alg::SkewOrthogonalizer) where {T} =
+    _skeworthogonalize!!(v, ω, q_odd, q_even, alg)
+
+function _skeworthogonalize!!(
+        v::T, ω, q_odd::T, q_even::T,
+        alg::Union{ClassicalSymplecticGramSchmidt, ModifiedSymplecticGramSchmidt}
+    ) where {T}
+    # Project out the symplectic pair (q_odd, q_even)
+    # Assumes ω(q_odd, q_even) = 1
+    s_odd = ω(q_even, v)   # ω(q_even, v)
+    v = add!!(v, q_odd, s_odd)
+    s_even = ω(q_odd, v)   # ω(q_odd, v)
+    v = add!!(v, q_even, -s_even)
+    return (v, s_odd, s_even)
+end
+
+function _skeworthogonalize!!(
+        v::T, ω, q_odd::T, q_even::T,
+        alg::Union{ClassicalSymplecticGramSchmidt2, ModifiedSymplecticGramSchmidt2}
+    ) where {T}
+    s_odd = ω(q_even, v)
+    v = add!!(v, q_odd, s_odd)
+    s_even = ω(q_odd, v)
+    v = add!!(v, q_even, -s_even)
+    # Reskew-orthogonalize
+    ds_odd = ω(q_even, v)
+    v = add!!(v, q_odd, ds_odd)
+    ds_even = ω(q_odd, v)
+    v = add!!(v, q_even, -ds_even)
+    return (v, s_odd + ds_odd, s_even + ds_even)
+end
+
+function _skeworthogonalize!!(
+        v::T, ω, q_odd::T, q_even::T,
+        alg::Union{ClassicalSymplecticGramSchmidtIR, ModifiedSymplecticGramSchmidtIR}
+    ) where {T}
+    nold = norm(v)
+    s_odd = ω(q_even, v)
+    v = add!!(v, q_odd, s_odd)
+    s_even = ω(q_odd, v)
+    v = add!!(v, q_even, -s_even)
+    nnew = norm(v)
+    while eps(one(nnew)) < nnew < alg.η * nold
+        nold = nnew
+        ds_odd = ω(q_even, v)
+        v = add!!(v, q_odd, ds_odd)
+        ds_even = ω(q_odd, v)
+        v = add!!(v, q_even, -ds_even)
+        s_odd += ds_odd
+        s_even += ds_even
+        nnew = norm(v)
+    end
+    return (v, s_odd, s_even)
+end
+
+"""
+    skeworthogonalize(v, ω, b::SymplecticBasis, [x::AbstractVector,] alg::SkewOrthogonalizer) -> w, x
+    skeworthogonalize!!(v, ω, b::SymplecticBasis, [x::AbstractVector,] alg::SkewOrthogonalizer) -> w, x
+
+    skeworthogonalize(v, ω, q_odd, q_even, alg::SkewOrthogonalizer) -> w, s_odd, s_even
+    skeworthogonalize!!(v, ω, q_odd, q_even, alg::SkewOrthogonalizer) -> w, s_odd, s_even
+
+Skew-orthogonalize vector `v` against all the vectors in the symplectic basis `b` using the
+skew-symmetric bilinear form `ω` and the skew-orthogonalization algorithm `alg` of type
+[`SkewOrthogonalizer`](@ref), and return the resulting vector `w` and the overlap
+coefficients `x` of `v` with the basis vectors in `b`.
+
+The skew-symmetric form `ω(u, v)` must satisfy `ω(u, v) = -ω(v, u)`. For a symplectic basis
+with pairs `(u_{2m-1}, u_{2m})` where `ω(u_{2m-1}, u_{2m}) = 1`, the skew-orthogonalization
+ensures:
+- `ω(u_{2m-1}, w) = 0` for all `m`
+- `ω(u_{2m}, w) = 0` for all `m`
+
+In case of `skeworthogonalize!!`, the vector `v` is mutated in place. In both functions,
+storage for the overlap coefficients `x` can be provided as optional argument
+`x::AbstractVector` with `length(x) >= length(b)`.
+
+One can also skew-orthogonalize `v` against a given symplectic pair `(q_odd, q_even)`
+(assumed to satisfy `ω(q_odd, q_even) = 1`), in which case the skew-orthogonal vector `w`
+and the coefficients `s_odd = ω(q_even, v)` and `s_even = ω(q_odd, v)` are returned.
+
+Note that `w` is not normalized, see also [`skeworthonormalize`](@ref).
+
+For more information on possible skew-orthogonalization algorithms, see
+[`SkewOrthogonalizer`](@ref) and its concrete subtypes
+[`ClassicalSymplecticGramSchmidt`](@ref), [`ModifiedSymplecticGramSchmidt`](@ref),
+[`ClassicalSymplecticGramSchmidt2`](@ref), [`ModifiedSymplecticGramSchmidt2`](@ref),
+[`ClassicalSymplecticGramSchmidtIR`](@ref) and [`ModifiedSymplecticGramSchmidtIR`](@ref).
+"""
+skeworthogonalize, skeworthogonalize!!
+
+# Skew-orthonormalization: skew-orthogonalization and normalization
+# For odd vectors: normalize with standard norm
+# For even vectors: scale so that ω(partner, v) = 1
+skeworthonormalize(v, ω, args...) = skeworthonormalize!!(scale(v, VectorInterface.One()), ω, args...)
+
+# Odd vector normalization: normalize with standard norm (no partner provided)
+function skeworthonormalize!!(v, ω, args...)
+    out = skeworthogonalize!!(v, ω, args...) # out[1] === v
+    β = norm(v)
+    v = scale!!(v, inv(β))
+    return tuple(v, β, Base.tail(out)...)
+end
+
+# Even vector normalization: scale so that ω(partner, v) = 1 (partner provided as first arg)
+function skeworthonormalize!!(v, ω, partner, b::SymplecticBasis, args...)
+    out = skeworthogonalize!!(v, ω, b, args...) # out[1] === v
+    β = ω(partner, v)
+    v = scale!!(v, inv(β))
+    return tuple(v, β, Base.tail(out)...)
+end
+
+function skeworthonormalize!!(v, ω, partner, b::SymplecticBasis, x::AbstractVector, alg::SkewOrthogonalizer)
+    out = skeworthogonalize!!(v, ω, b, x, alg) # out[1] === v
+    β = ω(partner, v)
+    v = scale!!(v, inv(β))
+    return tuple(v, β, Base.tail(out)...)
+end
+
+# Even vector normalization against a single symplectic pair
+function skeworthonormalize!!(v, ω, partner, q_odd, q_even, alg::SkewOrthogonalizer)
+    out = skeworthogonalize!!(v, ω, q_odd, q_even, alg) # out[1] === v
+    β = ω(partner, v)
+    v = scale!!(v, inv(β))
+    return tuple(v, β, Base.tail(out)...)
+end
+
+"""
+    skeworthonormalize(v, ω, b::SymplecticBasis, [x::AbstractVector,] alg::SkewOrthogonalizer) -> w, β, x
+    skeworthonormalize!!(v, ω, b::SymplecticBasis, [x::AbstractVector,] alg::SkewOrthogonalizer) -> w, β, x
+
+    skeworthonormalize(v, ω, partner, b::SymplecticBasis, [x::AbstractVector,] alg::SkewOrthogonalizer) -> w, β, x
+    skeworthonormalize!!(v, ω, partner, b::SymplecticBasis, [x::AbstractVector,] alg::SkewOrthogonalizer) -> w, β, x
+
+    skeworthonormalize(v, ω, q_odd, q_even, alg::SkewOrthogonalizer) -> w, β, s_odd, s_even
+    skeworthonormalize!!(v, ω, q_odd, q_even, alg::SkewOrthogonalizer) -> w, β, s_odd, s_even
+
+    skeworthonormalize(v, ω, partner, q_odd, q_even, alg::SkewOrthogonalizer) -> w, β, s_odd, s_even
+    skeworthonormalize!!(v, ω, partner, q_odd, q_even, alg::SkewOrthogonalizer) -> w, β, s_odd, s_even
+
+Skew-orthonormalize vector `v` against all the vectors in the symplectic basis `b` using
+the skew-symmetric bilinear form `ω` and the skew-orthogonalization algorithm `alg` of type
+[`SkewOrthogonalizer`](@ref).
+
+**For odd vectors** (no `partner` argument): returns the resulting vector `w` normalized to
+unit norm (`‖w‖ = 1`), the norm `β = ‖v‖` after skew-orthogonalizing, and the overlap
+coefficients `x`.
+
+**For even vectors** (with `partner` argument): returns the resulting vector `w` scaled such
+that `ω(partner, w) = 1`, the scaling factor `β = ω(partner, v)` after skew-orthogonalizing,
+and the overlap coefficients `x`. The `partner` should be the preceding odd vector in the
+symplectic pair.
+
+In case of `skeworthonormalize!!`, the vector `v` is mutated in place. In both functions,
+storage for the overlap coefficients `x` can be provided as optional argument
+`x::AbstractVector` with `length(x) >= length(b)`.
+
+One can also skew-orthonormalize `v` against a given symplectic pair `(q_odd, q_even)`,
+in which case the skew-orthonormal vector `w`, the normalization factor `β`, and the
+coefficients `s_odd` and `s_even` are returned.
+
+See [`skeworthogonalize`](@ref) if `w` does not need to be normalized.
+
+For more information on possible skew-orthogonalization algorithms, see
+[`SkewOrthogonalizer`](@ref) and its concrete subtypes
+[`ClassicalSymplecticGramSchmidt`](@ref), [`ModifiedSymplecticGramSchmidt`](@ref),
+[`ClassicalSymplecticGramSchmidt2`](@ref), [`ModifiedSymplecticGramSchmidt2`](@ref),
+[`ClassicalSymplecticGramSchmidtIR`](@ref) and [`ModifiedSymplecticGramSchmidtIR`](@ref).
+"""
+skeworthonormalize, skeworthonormalize!!
+
+skeworthonormalize(v, b::SymplecticBasis, args...) = skeworthonormalize(v, inner, b, args...)
+skeworthonormalize!!(v, b::SymplecticBasis, args...) = skeworthonormalize!!(v, inner, b, args...)
