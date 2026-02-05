@@ -612,17 +612,12 @@ Return the number of symplectic pairs in the basis `b`. This equals `div(length(
 numpairs(b::SymplecticBasis) = div(length(b), 2)
 
 # Skew-orthogonalization of a vector against a given SymplecticBasis
-skeworthogonalize(v, ω, args...) = skeworthogonalize!!(scale(v, true), ω, args...)
-skeworthogonalize(v, b::SymplecticBasis, args...) = skeworthogonalize(v, inner, b, args...)
-skeworthogonalize!!(v, b::SymplecticBasis, args...) = skeworthogonalize!!(v, inner, b, args...)
+skeworthogonalize(v, args...) = skeworthogonalize!!(scale(v, true), args...)
 
 function skeworthogonalize!!(
-        v::T, ω, b::SymplecticBasis{T}, alg::SkewOrthogonalizer
+        v::T, b::SymplecticBasis{T}, alg::SkewOrthogonalizer
     ) where {T}
     S = promote_type(scalartype(v), scalartype(T))
-    # Coefficients: for each pair (u_{2m-1}, u_{2m}), we store two coefficients
-    # c[2m-1] = ω(u_{2m}, v) (coefficient for subtracting u_{2m-1})
-    # c[2m] = ω(u_{2m-1}, v) (coefficient for subtracting u_{2m})
     c = Vector{S}(undef, length(b))
     return skeworthogonalize!!(v, ω, b, c, alg)
 end
@@ -639,42 +634,40 @@ end
 #   ω(u_{2m}, v) + α·(-1) + 0 = 0  =>  α = ω(u_{2m}, v)
 # So: w = v + ω(u_{2m}, v)·u_{2m-1} - ω(u_{2m-1}, v)·u_{2m}
 function skeworthogonalize!!(
-        v::T, ω, b::SymplecticBasis{T}, x::AbstractVector, ::ClassicalSymplecticGramSchmidt
+        v::T, b::SymplecticBasis{T}, x::AbstractVector, ::ClassicalSymplecticGramSchmidt
     ) where {T}
     np = numpairs(b)
     for m in 1:np
         i_odd = 2m - 1
         i_even = 2m
-        x[i_odd] = ω(b[i_even], v)   # coeff for adding u_{2m-1}
-        x[i_even] = ω(b[i_odd], v)   # coeff for subtracting u_{2m}
-    end
-    for m in 1:np
-        i_odd = 2m - 1
-        i_even = 2m
-        v = add!!(v, b[i_odd], x[i_odd])
-        v = add!!(v, b[i_even], -x[i_even])
+        h_o = inner(b[i_odd], v)
+        h_e = inner(b[i_even], v)
+        x[i_odd] = -h_e
+        x[i_even] = h_o
+        v = add!!(v, b[i_odd], h_e)
+        v = add!!(v, b[i_even], -h_o)
     end
     return (v, x)
 end
 
 function reskeworthogonalize!!(
-        v::T, ω, b::SymplecticBasis{T}, x::AbstractVector, ::ClassicalSymplecticGramSchmidt
+        v::T, b::SymplecticBasis{T}, x::AbstractVector, ::ClassicalSymplecticGramSchmidt
     ) where {T}
     s = similar(x) ## EXTRA ALLOCATION
     np = numpairs(b)
     for m in 1:np
         i_odd = 2m - 1
         i_even = 2m
-        s[i_odd] = ω(b[i_even], v)
+        s[i_odd] = -ω(b[i_even], v)
         s[i_even] = ω(b[i_odd], v)
     end
     for m in 1:np
         i_odd = 2m - 1
         i_even = 2m
-        v = add!!(v, b[i_odd], s[i_odd])
+        v = add!!(v, b[i_odd], -s[i_odd])
         v = add!!(v, b[i_even], -s[i_even])
     end
-    x[1:length(b)] .+= s[1:length(b)]
+    x .+= s
     return (v, x)
 end
 
