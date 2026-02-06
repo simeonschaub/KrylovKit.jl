@@ -132,7 +132,7 @@ function Base.iterate(iter::ArnoldiIterator, state)
     end
 end
 
-function initialize(iter::ArnoldiIterator{<:Any, <:Any, <:Orthogonalizer}; verbosity::Int = KrylovDefaults.verbosity[])
+function initialize(iter::ArnoldiIterator; verbosity::Int = KrylovDefaults.verbosity[])
     # initialize without using eltype
     x₀ = iter.x₀
     β₀ = norm(x₀)
@@ -148,39 +148,34 @@ function initialize(iter::ArnoldiIterator{<:Any, <:Any, <:Orthogonalizer}; verbo
     else
         r = scale!!(Ax₀, 1 / β₀)
     end
-    βold = norm(r)
-    r = add!!(r, v, -α)
-    β = norm(r)
-    r, α, β = _reorthogonalize_rayleigh!(v, r, α, βold, β, iter.orth)
-    V = OrthonormalBasis([v])
-    H = T[α, β]
+    if iter.orth isa Orthogonalizer
+        βold = norm(r)
+        r = add!!(r, v, -α)
+        β = norm(r)
+        r, α, β = _reorthogonalize_rayleigh!(v, r, α, βold, β, iter.orth)
+        if iter.orth isa Union{ClassicalGramSchmidt2, ModifiedGramSchmidt2}
+            dα = inner(v, r)
+            α += dα
+            r = add!!(r, v, -dα)
+            β = norm(r)
+        elseif iter.orth isa Union{ClassicalGramSchmidtIR, ModifiedGramSchmidtIR}
+            while eps(one(β)) < β < alg.η * βold
+                βold = β
+                dα = inner(v, r)
+                α += dα
+                r = add!!(r, v, -dα)
+                β = norm(r)
+            end
+        end
+        V = OrthonormalBasis([v])
+        H = T[α, β]
+    else
+        iszero(α) && throw(ArgumentError("initial vector and its image are symplectically orthogonal"))
+        V = SymplecticBasis([v])
+        H = T[zero(α), α]
+    end
     if verbosity > EACHITERATION_LEVEL
         @info "Arnoldi initiation at dimension 1: subspace normres = $(normres2string(β))"
-    end
-    return ArnoldiFactorization(1, V, H, r)
-end
-
-function initialize(iter::ArnoldiIterator{<:Any, <:Any, <:SkewOrthogonalizer}; verbosity::Int = KrylovDefaults.verbosity[])
-    # initialize without using eltype
-    x₀ = iter.x₀
-    β₀ = norm(x₀)
-    iszero(β₀) && throw(ArgumentError("initial vector should not have norm zero"))
-    Ax₀ = apply(iter.operator, x₀)
-    α = inner(x₀, Ax₀) / (β₀ * β₀)
-    T = typeof(α) # scalar type of the Rayleigh quotient
-    # this line determines the vector type that we will henceforth use
-    # vector scalar type can be different from `T`, e.g. for real inner products
-    v = add!!(scale(Ax₀, zero(α)), x₀, 1 / β₀)
-    if typeof(Ax₀) != typeof(v)
-        r = add!!(zerovector(v), Ax₀, 1 / β₀)
-    else
-        r = scale!!(Ax₀, 1 / β₀)
-    end
-    iszero(α) && throw(ArgumentError("initial vector and its image are symplectically orthogonal"))
-    V = SymplecticBasis([v])
-    H = T[zero(α), α]
-    if verbosity > EACHITERATION_LEVEL
-        @info "Arnoldi initiation at dimension 1: subspace normres = $(normres2string(α))"
     end
     return ArnoldiFactorization(1, V, H, r)
 end
@@ -198,41 +193,25 @@ function initialize!(
 
     V[1] = scale!!(V[1], x₀, 1 / norm(x₀))
     w = apply(iter.operator, V[1])
-    r, α = orthogonalize!!(w, V[1], iter.orth)
-    β = norm(r)
+    if iter.orth isa Orthogonalizer
+        r, α = orthogonalize!!(w, V[1], iter.orth)
+        β = norm(r)
+        push!(H, α, β)
+    else
+        α = inner(V[1], w)
+        iszero(α) && throw(ArgumentError("initial vector and its image are symplectically orthogonal"))
+        r = w
+        push!(H, zero(α), α)
+    end
     state.k = 1
-    push!(H, α, β)
     state.r = r
     if verbosity > EACHITERATION_LEVEL
         @info "Arnoldi initiation at dimension 1: subspace normres = $(normres2string(β))"
     end
     return state
 end
-function initialize!(
-        iter::ArnoldiIterator{<:Any, <:Any, <:SkewOrthogonalizer}, state::ArnoldiFactorization;
-        verbosity::Int = KrylovDefaults.verbosity[]
-    )
-    x₀ = iter.x₀
-    V = state.V
-    while length(V) > 1
-        pop!(V)
-    end
-    H = empty!(state.H)
-
-    V[1] = scale!!(V[1], x₀, 1 / norm(x₀))
-    w = apply(iter.operator, V[1])
-    α = inner(V[1], w)
-    iszero(α) && throw(ArgumentError("initial vector and its image are symplectically orthogonal"))
-    state.k = 1
-    push!(H, zero(α), α)
-    state.r = r
-    if verbosity > EACHITERATION_LEVEL
-        @info "Arnoldi initiation at dimension 1: subspace normres = $(normres2string(α))"
-    end
-    return state
-end
 function expand!(
-        iter::ArnoldiIterator{<:Any, <:Any, <:Orthogonalizer}, state::ArnoldiFactorization;
+        iter::ArnoldiIterator, state::ArnoldiFactorization;
         verbosity::Int = KrylovDefaults.verbosity[]
     )
     state.k += 1
@@ -240,7 +219,11 @@ function expand!(
     V = state.V
     H = state.H
     r = state.r
-    β = normres(state)
+    if iter.orth isa Orthogonalizer
+        β = normres(state)
+    else
+        β = iseven(k) ? normres(state) : norm(r)
+    end
     push!(V, scale(r, 1 / β))
     m = length(H)
     resize!(H, m + k + 1)
@@ -252,28 +235,7 @@ function expand!(
     end
     return state
 end
-function expand!(
-        iter::ArnoldiIterator{<:Any, <:Any, <:SkewOrthogonalizer}, state::ArnoldiFactorization;
-        verbosity::Int = KrylovDefaults.verbosity[]
-    )
-    state.k += 1
-    k = state.k
-    V = state.V
-    H = state.H
-    r = state.r
-    β = iseven(k) ? normres(state) : norm(r)
-    push!(V, scale(r, 1 / β))
-    m = length(H)
-    resize!(H, m + k + 1)
-    r, β = arnoldirecurrence!!(iter.operator, V, view(H, (m + 1):(m + k)), iter.orth)
-    H[m + k + 1] = β
-    state.r = r
-    if verbosity > EACHITERATION_LEVEL
-        @info "Arnoldi expansion to dimension $k: subspace normres = $(normres2string(β))"
-    end
-    return state
-end
-function shrink!(state::ArnoldiFactorization{<:Any, <:Any, <:OrthonormalBasis}, k; verbosity::Int = KrylovDefaults.verbosity[])
+function shrink!(state::ArnoldiFactorization, k; verbosity::Int = KrylovDefaults.verbosity[])
     length(state) <= k && return state
     V = state.V
     H = state.H
@@ -283,65 +245,16 @@ function shrink!(state::ArnoldiFactorization{<:Any, <:Any, <:OrthonormalBasis}, 
     r = pop!(V)
     resize!(H, (k * k + 3 * k) >> 1)
     state.k = k
-    β = normres(state)
+    if iter.orth isa Orthogonalizer
+        β = normres(state)
+    else
+        β = iseven(k) ? normres(state) : norm(r)
+    end
     if verbosity > EACHITERATION_LEVEL
         @info "Arnoldi reduction to dimension $k: subspace normres = $(normres2string(β))"
     end
     state.r = scale!!(r, β)
     return state
-end
-function shrink!(state::ArnoldiFactorization{<:Any, <:Any, <:SymplecticBasis}, k; verbosity::Int = KrylovDefaults.verbosity[])
-    length(state) <= k && return state
-    V = state.V
-    H = state.H
-    while length(V) > k + 1
-        pop!(V)
-    end
-    r = pop!(V)
-    resize!(H, (k * k + 3 * k) >> 1)
-    state.k = k
-    β = normres(state)
-    if verbosity > EACHITERATION_LEVEL
-        @info "Arnoldi reduction to dimension $k: subspace normres = $(normres2string(β))"
-    end
-    # For symplectic: if k is even, residual is odd vector (normalize by norm)
-    # if k is odd, residual is even vector (already normalized by pairing)
-    if iseven(k)
-        state.r = scale!!(r, β)
-    else
-        # r is already normalized by symplectic pairing, just use it
-        state.r = r
-    end
-    return state
-end
-
-function _reorthogonalize_rayleigh!(
-        v, r, α, βold, β, ::Union{ClassicalGramSchmidt2, ModifiedGramSchmidt2}
-    )
-    dα = inner(v, r)
-    α += dα
-    r = add!!(r, v, -dα)
-    β = norm(r)
-    return r, α, β
-end
-
-function _reorthogonalize_rayleigh!(
-        v, r, α, βold, β, alg::Union{ClassicalGramSchmidtIR, ModifiedGramSchmidtIR}
-    )
-    while eps(one(β)) < β < alg.η * βold
-        βold = β
-        dα = inner(v, r)
-        α += dα
-        r = add!!(r, v, -dα)
-        β = norm(r)
-    end
-    return r, α, β
-end
-
-function _reorthogonalize_rayleigh!(
-        v, r, α, βold, β, ::Orthogonalizer
-    )
-    return r, α, β
 end
 
 # Arnoldi recurrence: simply use provided orthonormalization routines
