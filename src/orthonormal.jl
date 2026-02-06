@@ -68,15 +68,15 @@ _use_multithreaded_array_kernel(::Type) = false
 function _use_multithreaded_array_kernel(::Type{<:Array{T}}) where {T <: Number}
     return isbitstype(T) && get_num_threads() > 1
 end
-function _use_multithreaded_array_kernel(::Type{<:OrthonormalBasis{T}}) where {T}
+function _use_multithreaded_array_kernel(::Type{<:Basis{T}}) where {T}
     return _use_multithreaded_array_kernel(T)
 end
 
 """
-    project!!(y::AbstractVector, b::OrthonormalBasis, x,
+    project!!(y::AbstractVector, b::Basis, x,
         [α::Number = 1, β::Number = 0, r = Base.OneTo(length(b))])
 
-For a given orthonormal basis `b`, compute the expansion coefficients `y` resulting from
+For a given basis `b`, compute the expansion coefficients `y` resulting from
 projecting the vector `x` onto the subspace spanned by `b`; more specifically this computes
 
 ```
@@ -86,7 +86,7 @@ projecting the vector `x` onto the subspace spanned by `b`; more specifically th
 for all ``j ∈ r``.
 """
 function project!!(
-        y::AbstractVector, b::OrthonormalBasis, x,
+        y::AbstractVector, b::Basis, x,
         α::Number = true, β::Number = false, r = Base.OneTo(length(b))
     )
     # no specialized routine for IndexLinear x because reduction dimension is large dimension
@@ -118,10 +118,10 @@ function project!!(
 end
 
 """
-    unproject!!(y, b::OrthonormalBasis, x::AbstractVector,
+    unproject!!(y, b::Basis, x::AbstractVector,
         [α::Number = 1, β::Number = 0, r = Base.OneTo(length(b))])
 
-For a given orthonormal basis `b`, reconstruct the vector-like object `y` that is defined by
+For a given basis `b`, reconstruct the vector-like object `y` that is defined by
 expansion coefficients with respect to the basis vectors in `b` in `x`; more specifically
 this computes
 
@@ -130,7 +130,7 @@ this computes
 ```
 """
 function unproject!!(
-        y, b::OrthonormalBasis, x::AbstractVector,
+        y, b::Basis, x::AbstractVector,
         α::Number = true, β::Number = false, r = Base.OneTo(length(b))
     )
     if _use_multithreaded_array_kernel(y)
@@ -149,7 +149,7 @@ function unproject!!(
     return y
 end
 function unproject_linear_multithreaded!(
-        y::AbstractArray, b::OrthonormalBasis{<:AbstractArray}, x::AbstractVector,
+        y::AbstractArray, b::Basis{<:AbstractArray}, x::AbstractVector,
         α::Number = true, β::Number = false, r = Base.OneTo(length(b))
     )
     # multi-threaded implementation, similar to BLAS level 2 matrix vector multiplication
@@ -172,7 +172,7 @@ function unproject_linear_multithreaded!(
     return y
 end
 function unproject_linear_kernel!(
-        y::AbstractArray, b::OrthonormalBasis{<:AbstractArray}, x::AbstractVector,
+        y::AbstractArray, b::Basis{<:AbstractArray}, x::AbstractVector,
         I, α::Number, β::Number, r
     )
     return @inbounds begin
@@ -622,19 +622,51 @@ function skeworthogonalize!!(
     return skeworthogonalize!!(v, b, c, alg)
 end
 
-# Classical Symplectic Gram-Schmidt: project all at once
-# For a symplectic basis with ω(u_{2m-1}, u_{2m}) = 1, to make w satisfy:
-#   ω(u_{2m-1}, w) = 0 and ω(u_{2m}, w) = 0
-# We want: w = v + α·u_{2m-1} + β·u_{2m}
-# Condition 1: ω(u_{2m-1}, w) = 0
-#   ω(u_{2m-1}, v) + α·ω(u_{2m-1}, u_{2m-1}) + β·ω(u_{2m-1}, u_{2m}) = 0
-#   ω(u_{2m-1}, v) + 0 + β·1 = 0  =>  β = -ω(u_{2m-1}, v)
-# Condition 2: ω(u_{2m}, w) = 0
-#   ω(u_{2m}, v) + α·ω(u_{2m}, u_{2m-1}) + β·ω(u_{2m}, u_{2m}) = 0
-#   ω(u_{2m}, v) + α·(-1) + 0 = 0  =>  α = ω(u_{2m}, v)
-# So: w = v + ω(u_{2m}, v)·u_{2m-1} - ω(u_{2m-1}, v)·u_{2m}
+# See pages 3-4 of https://people.math.ethz.ch/%7Eacannas/Papers/lsg.pdf
 function skeworthogonalize!!(
         v::T, b::SymplecticBasis{T}, x::AbstractVector, ::ClassicalSymplecticGramSchmidt
+    ) where {T}
+    np = numpairs(b)
+    idx_odd = 1:2:(2np - 1)
+    idx_even = 2:2:2np
+    project!!(view(x, idx_odd), b, v, -1, 0, idx_even)
+    project!!(view(x, idx_even), b, v, 1, 0, idx_odd)
+    v = unproject!!(v, b, x, -1, 1)
+    return (v, x)
+end
+
+function reskeworthogonalize!!(
+        v::T, b::SymplecticBasis{T}, x::AbstractVector, ::ClassicalSymplecticGramSchmidt
+    ) where {T}
+    s = similar(x) ## EXTRA ALLOCATION
+    (v, x) = skeworthogonalize!!(v, b, s, ClassicalSymplecticGramSchmidt())
+    x .+= s
+    return (v, x)
+end
+
+function skeworthogonalize!!(
+        v::T, b::SymplecticBasis{T}, x::AbstractVector, ::ClassicalSymplecticGramSchmidt2
+    ) where {T}
+    (v, x) = skeworthogonalize!!(v, b, x, ClassicalSymplecticGramSchmidt())
+    return reskeworthogonalize!!(v, b, x, ClassicalSymplecticGramSchmidt())
+end
+
+function skeworthogonalize!!(
+        v::T, b::SymplecticBasis{T}, x::AbstractVector, alg::ClassicalSymplecticGramSchmidtIR
+    ) where {T}
+    nold = norm(v)
+    (v, x) = skeworthogonalize!!(v, b, x, ClassicalSymplecticGramSchmidt())
+    nnew = norm(v)
+    while eps(one(nnew)) < nnew < alg.η * nold
+        nold = nnew
+        (v, x) = reskeworthogonalize!!(v, b, x, ClassicalSymplecticGramSchmidt())
+        nnew = norm(v)
+    end
+    return (v, x)
+end
+
+function skeworthogonalize!!(
+        v::T, b::SymplecticBasis{T}, x::AbstractVector, ::ModifiedSymplecticGramSchmidt
     ) where {T}
     np = numpairs(b)
     for m in 1:np
@@ -649,3 +681,124 @@ function skeworthogonalize!!(
     end
     return (v, x)
 end
+
+function reskeworthogonalize!!(
+        v::T, b::SymplecticBasis{T}, x::AbstractVector, ::ModifiedSymplecticGramSchmidt
+    ) where {T}
+    np = numpairs(b)
+    for m in 1:np
+        i_odd = 2m - 1
+        i_even = 2m
+        h_e = inner(b[i_odd], v)
+        h_f = inner(b[i_even], v)
+        s_odd = -h_f
+        s_even = h_e
+        x[i_odd] += s_odd
+        x[i_even] += s_even
+        v = add!!(v, b[i_odd], h_f)
+        v = add!!(v, b[i_even], -h_e)
+    end
+    return (v, x)
+end
+
+function skeworthogonalize!!(
+        v::T, b::SymplecticBasis{T}, x::AbstractVector, ::ModifiedSymplecticGramSchmidt2
+    ) where {T}
+    (v, x) = skeworthogonalize!!(v, b, x, ModifiedSymplecticGramSchmidt())
+    return reskeworthogonalize!!(v, b, x, ModifiedSymplecticGramSchmidt())
+end
+
+function skeworthogonalize!!(
+        v::T, b::SymplecticBasis{T}, x::AbstractVector, alg::ModifiedSymplecticGramSchmidtIR
+    ) where {T}
+    nold = norm(v)
+    (v, x) = skeworthogonalize!!(v, b, x, ModifiedSymplecticGramSchmidt())
+    nnew = norm(v)
+    while eps(one(nnew)) < nnew < alg.η * nold
+        nold = nnew
+        (v, x) = reskeworthogonalize!!(v, b, x, ModifiedSymplecticGramSchmidt())
+        nnew = norm(v)
+    end
+    return (v, x)
+end
+
+# Skew-orthonormalization: skew-orthogonalization and normalization
+# For odd vectors: normalize with standard norm
+# For even vectors: scale so that ω(partner, v) = 1
+skeworthonormalize(v, args...) = skeworthonormalize!!(scale(v, VectorInterface.One()), args...)
+
+function skeworthonormalize!!(v, b::SymplecticBasis, args...)
+    out = skeworthogonalize!!(v, b, args...) # out[1] === v
+    if iseven(length(b))
+        # Adding odd vector: normalize with standard norm
+        β = norm(v)
+        v = scale!!(v, inv(β))
+    else
+        # Adding even vector: scale so that ω(partner, v) = 1
+        # The partner is the last vector in b (the odd vector of the current pair)
+        β = inner(last(b), v)
+        v = scale!!(v, inv(β))
+    end
+    return tuple(v, β, Base.tail(out)...)
+end
+
+"""
+    skeworthogonalize(v, b::SymplecticBasis, [x::AbstractVector,] alg::SkewOrthogonalizer) -> w, x
+    skeworthogonalize!!(v, b::SymplecticBasis, [x::AbstractVector,] alg::SkewOrthogonalizer) -> w, x
+
+Skew-orthogonalize vector `v` against all the vectors in the symplectic basis `b` using the
+skew-orthogonalization algorithm `alg` of type [`SkewOrthogonalizer`](@ref), and return the
+resulting vector `w` and the overlap coefficients `x` of `v` with the basis vectors in `b`.
+
+The skew-orthogonalization uses the skew-symmetric form `ω = inner`, which is expected to
+satisfy `ω(u, v) = -ω(v, u)` when vectors are appropriately wrapped (e.g., using
+`InnerProductVec`). For a symplectic basis with pairs `(u_{2m-1}, u_{2m})` where
+`ω(u_{2m-1}, u_{2m}) = 1`, the skew-orthogonalization ensures:
+- `ω(u_{2m-1}, w) = 0` for all `m`
+- `ω(u_{2m}, w) = 0` for all `m`
+
+In case of `skeworthogonalize!!`, the vector `v` is mutated in place. In both functions,
+storage for the overlap coefficients `x` can be provided as optional argument
+`x::AbstractVector` with `length(x) >= length(b)`.
+
+Note that `w` is not normalized, see also [`skeworthonormalize`](@ref).
+
+For more information on possible skew-orthogonalization algorithms, see
+[`SkewOrthogonalizer`](@ref) and its concrete subtypes
+[`ClassicalSymplecticGramSchmidt`](@ref), [`ModifiedSymplecticGramSchmidt`](@ref),
+[`ClassicalSymplecticGramSchmidt2`](@ref), [`ModifiedSymplecticGramSchmidt2`](@ref),
+[`ClassicalSymplecticGramSchmidtIR`](@ref) and [`ModifiedSymplecticGramSchmidtIR`](@ref).
+"""
+skeworthogonalize, skeworthogonalize!!
+
+"""
+    skeworthonormalize(v, b::SymplecticBasis, [x::AbstractVector,] alg::SkewOrthogonalizer) -> w, β, x
+    skeworthonormalize!!(v, b::SymplecticBasis, [x::AbstractVector,] alg::SkewOrthogonalizer) -> w, β, x
+
+Skew-orthonormalize vector `v` against all the vectors in the symplectic basis `b` using
+the skew-orthogonalization algorithm `alg` of type [`SkewOrthogonalizer`](@ref).
+
+The normalization depends on the current length of the basis:
+
+**When `length(b)` is even** (adding an odd vector): returns the resulting vector `w`
+normalized to unit norm (`‖w‖ = 1`), the norm `β = ‖v‖` after skew-orthogonalizing, and
+the overlap coefficients `x`.
+
+**When `length(b)` is odd** (adding an even vector): returns the resulting vector `w`
+scaled such that `ω(last(b), w) = 1`, where `last(b)` is the odd partner of the pair.
+Returns the scaling factor `β = ω(last(b), v)` after skew-orthogonalizing, and the overlap
+coefficients `x`.
+
+In case of `skeworthonormalize!!`, the vector `v` is mutated in place. In both functions,
+storage for the overlap coefficients `x` can be provided as optional argument
+`x::AbstractVector` with `length(x) >= length(b)`.
+
+See [`skeworthogonalize`](@ref) if `w` does not need to be normalized.
+
+For more information on possible skew-orthogonalization algorithms, see
+[`SkewOrthogonalizer`](@ref) and its concrete subtypes
+[`ClassicalSymplecticGramSchmidt`](@ref), [`ModifiedSymplecticGramSchmidt`](@ref),
+[`ClassicalSymplecticGramSchmidt2`](@ref), [`ModifiedSymplecticGramSchmidt2`](@ref),
+[`ClassicalSymplecticGramSchmidtIR`](@ref) and [`ModifiedSymplecticGramSchmidtIR`](@ref).
+"""
+skeworthonormalize, skeworthonormalize!!
