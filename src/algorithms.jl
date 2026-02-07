@@ -94,6 +94,16 @@ See https://journal.austms.org.au/ojs/index.php/ANZIAMJ/article/view/9380/1920, 
 @enum ESR ESR1 ESR2# ESR3
 
 """
+    @enum ESR ESR1 ESR2 ESR3
+
+Enum for selecting Elementary Symplectic factorization (ESR) variant:
+- `ESR1`: r11 = ||x₁||, r12 = 0
+- `ESR2`: r11 = ||x₁||, r12 = s₁ᵀx₂ (most stable, s₁ and s₂ orthogonal)
+- `ESR3`: r11 = ||x₁ᵀJx₂||, r12 = 0
+"""
+@enum ESR ESR1 ESR2 ESR3
+
+"""
     abstract type SkewOrthogonalizer
 
 Supertype for representing different skew-orthogonalization strategies or algorithms that
