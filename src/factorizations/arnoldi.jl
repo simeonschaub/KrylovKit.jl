@@ -135,18 +135,24 @@ end
 function initialize(iter::ArnoldiIterator; verbosity::Int = KrylovDefaults.verbosity[])
     # initialize without using eltype
     x₀ = iter.x₀
-    β₀ = norm(x₀)
-    iszero(β₀) && throw(ArgumentError("initial vector should not have norm zero"))
-    Ax₀ = apply(iter.operator, x₀)
-    α = inner(x₀, Ax₀) / (β₀ * β₀)
+    if iter.orth isa Orthogonalizer || iter.orth.esr != ESR3
+        β₀ = γ = norm(x₀)
+        iszero(β₀) && throw(ArgumentError("initial vector should not have norm zero"))
+        Ax₀ = apply(iter.operator, x₀)
+        α = inner(x₀, Ax₀) / (β₀ * β₀)
+    else
+        Ax₀ = apply(iter.operator, x₀)
+        β₀ = inner(x₀, Ax₀)
+        α = γ = one(β₀)
+    end
     T = typeof(α) # scalar type of the Rayleigh quotient
     # this line determines the vector type that we will henceforth use
     # vector scalar type can be different from `T`, e.g. for real inner products
     v = add!!(scale(Ax₀, zero(α)), x₀, 1 / β₀)
     if typeof(Ax₀) != typeof(v)
-        r = add!!(zerovector(v), Ax₀, 1 / β₀)
+        r = add!!(zerovector(v), Ax₀, 1 / γ)
     else
-        r = scale!!(Ax₀, 1 / β₀)
+        r = scale!!(Ax₀, 1 / γ)
     end
     if iter.orth isa Orthogonalizer
         βold = norm(r)
@@ -172,7 +178,13 @@ function initialize(iter::ArnoldiIterator; verbosity::Int = KrylovDefaults.verbo
     else
         iszero(α) && throw(ArgumentError("initial vector and its image are symplectically orthogonal"))
         V = SymplecticBasis([v])
-        H = T[zero(α), α]
+        if iter.orth.esr == ESR2
+            r12 = standard_dot(v, r)
+            r = add!!(r, v, -r12)
+            H = T[r12, α]
+        else
+            H = T[zero(α), α]
+        end
     end
     if verbosity > EACHITERATION_LEVEL
         @info "Arnoldi initiation at dimension 1: subspace normres = $(normres2string(β))"
@@ -191,17 +203,28 @@ function initialize!(
     end
     H = empty!(state.H)
 
-    V[1] = scale!!(V[1], x₀, 1 / norm(x₀))
-    w = apply(iter.operator, V[1])
+    if iter.orth isa Orthogonalizer || iter.orth.esr != ESR3
+        V[1] = scale!!(V[1], x₀, 1 / norm(x₀))
+        w = apply(iter.operator, V[1])
+    else
+        w = apply(iter.operator, x₀)
+        V[1] = scale!!(V[1], x₀, 1 / inner(x₀, w))
+    end
     if iter.orth isa Orthogonalizer
         r, α = orthogonalize!!(w, V[1], iter.orth)
         β = norm(r)
         push!(H, α, β)
     else
-        α = inner(V[1], w)
+        @show α = inner(V[1], w)
         iszero(α) && throw(ArgumentError("initial vector and its image are symplectically orthogonal"))
         r = w
-        push!(H, zero(α), α)
+        if iter.orth.esr == ESR2
+            r12 = standard_dot(V[1], r)
+            r = add!!(r, V[1], -r12)
+            push!(H, r12, α)
+        else
+            push!(H, zero(α), α)
+        end
     end
     state.k = 1
     state.r = r
@@ -219,7 +242,7 @@ function expand!(
     V = state.V
     H = state.H
     r = state.r
-    if iter.orth isa Orthogonalizer
+    if iter.orth isa Orthogonalizer || iter.orth.esr == ESR3
         β = normres(state)
     else
         β = iseven(k) ? normres(state) : norm(r)
@@ -271,5 +294,5 @@ function arnoldirecurrence!!(
     )
     w = apply(operator, last(V))
     r, h = skeworthogonalize!!(w, V, h, orth)
-    return r, iseven(length(V)) ? norm(r) : inner(last(V), r)
+    return r, (iseven(length(V)) && orth.esr != ESR3) ? norm(r) : inner(last(V), r)
 end
