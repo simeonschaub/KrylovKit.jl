@@ -661,7 +661,7 @@ function skeworthogonalize!!(
     nold = norm(v)
     (v, x) = skeworthogonalize!!(v, b, x, csgs)
     nnew = norm(v)
-    while eps(one(nnew)) < alg.η * nold
+    while eps(one(nnew)) < nnew < alg.η * nold
         nold = nnew
         (v, x) = reskeworthogonalize!!(v, b, x, csgs)
         nnew = norm(v)
