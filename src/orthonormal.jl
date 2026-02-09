@@ -710,13 +710,10 @@ function reskeworthogonalize!!(
         v = add!!(v, b[i_odd], h_f)
         v = add!!(v, b[i_even], -h_e)
     end
-    if isodd(length(b))
-        if alg.esr == ESR2
-            x[2np + 1] = standard_dot(last(b), v)
-            v = add!!(v, last(b), -x[2np + 1])
-        else
-            x[2np + 1] = zero(eltype(x))
-        end
+    if isodd(length(b)) && alg.esr == ESR2
+        r11 = standard_dot(last(b), v)
+        x[2np + 1] += r11
+        v = add!!(v, last(b), -r11)
     end
     return (v, x)
 end
