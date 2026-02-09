@@ -215,7 +215,7 @@ function initialize!(
         β = norm(r)
         push!(H, α, β)
     else
-        @show α = inner(V[1], w)
+        α = inner(V[1], w)
         iszero(α) && throw(ArgumentError("initial vector and its image are symplectically orthogonal"))
         r = w
         if iter.orth.esr == ESR2
@@ -242,7 +242,7 @@ function expand!(
     V = state.V
     H = state.H
     r = state.r
-    if iter.orth isa Orthogonalizer || iter.orth.esr == ESR3
+    if iter.orth isa Orthogonalizer
         β = normres(state)
     else
         β = iseven(k) ? normres(state) : norm(r)
@@ -250,7 +250,7 @@ function expand!(
     push!(V, scale(r, 1 / β))
     m = length(H)
     resize!(H, m + k + 1)
-    r, β = arnoldirecurrence!!(iter.operator, V, view(H, (m + 1):(m + k)), iter.orth)
+    r, β = arnoldirecurrence!!(iter.operator, V, view(H, (m + 1):(m + k)), iter.orth, β)
     H[m + k + 1] = β
     state.r = r
     if verbosity > EACHITERATION_LEVEL
@@ -276,13 +276,12 @@ function shrink!(state::ArnoldiFactorization, k; verbosity::Int = KrylovDefaults
     if verbosity > EACHITERATION_LEVEL
         @info "Arnoldi reduction to dimension $k: subspace normres = $(normres2string(β))"
     end
-    state.r = scale!!(r, β)
     return state
 end
 
 # Arnoldi recurrence: simply use provided orthonormalization routines
 function arnoldirecurrence!!(
-        operator, V::OrthonormalBasis, h::AbstractVector, orth::Orthogonalizer
+        operator, V::OrthonormalBasis, h::AbstractVector, orth::Orthogonalizer, β,
     )
     w = apply(operator, last(V))
     r, h = orthogonalize!!(w, V, h, orth)
@@ -290,9 +289,13 @@ function arnoldirecurrence!!(
 end
 
 function arnoldirecurrence!!(
-        operator, V::SymplecticBasis, h::AbstractVector, orth::SkewOrthogonalizer
+        operator, V::SymplecticBasis, h::AbstractVector, orth::SkewOrthogonalizer, β,
     )
     w = apply(operator, last(V))
+    if orth.esr == ESR3 && isodd(length(V))
+        r11 = inner(last(V), w)
+        V[end] = scale(last(V), β / r11)
+    end
     r, h = skeworthogonalize!!(w, V, h, orth)
-    return r, (iseven(length(V)) && orth.esr != ESR3) ? norm(r) : inner(last(V), r)
+    return r, iseven(length(V)) ? norm(r) : (orth.esr == ESR3 ? β : inner(last(V), r))
 end
