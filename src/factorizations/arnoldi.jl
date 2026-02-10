@@ -47,7 +47,7 @@ Base.eltype(::Type{<:ArnoldiFactorization{<:Any, S}}) where {S} = S
 basis(F::ArnoldiFactorization) = F.V
 rayleighquotient(F::ArnoldiFactorization) = PackedHessenberg(F.H, F.k)
 residual(F::ArnoldiFactorization) = F.r
-@inbounds normres(F::ArnoldiFactorization) = abs(F.H[end])
+@inbounds normres(F::ArnoldiFactorization) = F.H[end]
 rayleighextension(F::ArnoldiFactorization) = SimpleBasisVector(F.k, F.k)
 
 # Arnoldi iteration for constructing the orthonormal basis of a Krylov subspace.
@@ -137,14 +137,12 @@ function initialize(iter::ArnoldiIterator; verbosity::Int = KrylovDefaults.verbo
     x₀ = iter.x₀
     if iter.orth isa Orthogonalizer || iter.orth.esr != ESR3
         β₀ = norm(x₀)
-        iszero(β₀) && throw(ArgumentError("initial vector should not have norm zero"))
-        Ax₀ = apply(iter.operator, x₀)
-        α = inner(x₀, Ax₀) / (β₀ * β₀)
     else
-        Ax₀ = apply(iter.operator, x₀)
-        β₀ = √inner(x₀, Ax₀)
-        α = one(β₀)
+        β₀ = one(scalartype(x₀))
     end
+    iszero(β₀) && throw(ArgumentError("initial vector should not have norm zero"))
+    Ax₀ = apply(iter.operator, x₀)
+    α = inner(x₀, Ax₀) / (β₀ * β₀)
     T = typeof(α) # scalar type of the Rayleigh quotient
     # this line determines the vector type that we will henceforth use
     # vector scalar type can be different from `T`, e.g. for real inner products
@@ -204,12 +202,12 @@ function initialize!(
     H = empty!(state.H)
 
     if iter.orth isa Orthogonalizer || iter.orth.esr != ESR3
-        V[1] = scale!!(V[1], x₀, 1 / norm(x₀))
-        w = apply(iter.operator, V[1])
+        β₀ = norm(x₀)
     else
-        w = apply(iter.operator, x₀)
-        V[1] = scale!!(V[1], x₀, 1 / √inner(x₀, w))
+        β₀ = one(scalartype(x₀))
     end
+    V[1] = scale!!(V[1], x₀, 1 / β₀)
+    w = apply(iter.operator, V[1])
     if iter.orth isa Orthogonalizer
         r, α = orthogonalize!!(w, V[1], iter.orth)
         β = norm(r)

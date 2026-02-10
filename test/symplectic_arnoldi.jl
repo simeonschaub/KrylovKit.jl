@@ -41,7 +41,7 @@
         return max_err
     end
 
-    for esr in (ESR1, ESR2, ESR3)
+    for esr in (ESR1, ESR2, ESR3m)
         algs = (
             ClassicalSymplecticGramSchmidt(esr),
             ModifiedSymplecticGramSchmidt(esr),
