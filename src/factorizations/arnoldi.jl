@@ -182,7 +182,9 @@ function Base.iterate(iter::ArnoldiIterator)
     return state, state
 end
 function Base.iterate(iter::ArnoldiIterator, state)
-    nr = normres(state)
+    # take the absolute value since `normres` of a `SymplecticArnoldiFactorization` is a
+    # signed (or complex) scaling factor rather than a norm
+    nr = abs(normres(state))
     if nr < eps(typeof(nr))
         return nothing
     else
@@ -356,7 +358,11 @@ function expand!(
     V = state.V
     H = state.H
     r = state.r
-    β = (iseven(k) || iter.orth.esr == ESR3m) ? normres(state) : norm(r)
+    # H[end] always contains the coefficient relating the residual to the next basis
+    # vector: the norm of the residual when completing an odd index (or one for ESR3m),
+    # and the symplectic form with its partner when completing an even index
+    β = normres(state)
+    iszero(β) && throw(ArgumentError("breakdown when expanding the symplectic Arnoldi factorization to dimension $k"))
     push!(V, scale(r, 1 / β))
     m = length(H)
     resize!(H, m + k + 1)
@@ -399,7 +405,9 @@ function shrink!(
     r = pop!(V)
     resize!(H, (k * k + 3 * k) >> 1)
     state.k = k
-    β = iseven(k) ? normres(state) : norm(r)
+    # H[end] is the stored coefficient relating the residual to the popped basis vector;
+    # for odd k the popped vector is ω-normalized, so its norm is not the right scale
+    β = normres(state)
     if verbosity > EACHITERATION_LEVEL
         @info "Arnoldi reduction to dimension $k: subspace normres = $(normres2string(β))"
     end

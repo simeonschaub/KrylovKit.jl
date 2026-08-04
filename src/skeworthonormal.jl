@@ -68,12 +68,13 @@ numpairs(b::SymplecticBasis) = div(length(b), 2)
 # Projection using the symplectic form for SymplecticBasis
 """
     skewproject!!(y::AbstractVector, b::SymplecticBasis, x,
-        [α::Number = 1, β::Number = 0, r = Base.OneTo(length(b))])
+        [α::Number = 1, β::Number = 0, r = Base.OneTo(2 * numpairs(b))])
 
 Project the vector `x` onto the symplectic basis `b` using the symplectic form
-[`symplecticform`](@ref). The projection coefficients are computed using the symplectic
-partner of each output index, with appropriate signs dictated by the Darboux basis
-structure:
+[`symplecticform`](@ref). The index range `r` must consist of complete symplectic pairs,
+i.e. `length(r)` must be even. The projection coefficients are computed using the
+symplectic partner of each output index, with appropriate signs dictated by the Darboux
+basis structure:
 
 - for odd `j`: `y[j] = β*y[j] - α * symplecticform(b[r[j+1]], x)`
 - for even `j`: `y[j] = β*y[j] + α * symplecticform(b[r[j-1]], x)`
@@ -85,9 +86,10 @@ symplectic basis where `ω(u_{2m-1}, u_{2m}) = 1`.
 """
 function skewproject!!(
         y::AbstractVector, b::SymplecticBasis, x,
-        α::Number = true, β::Number = false, r = Base.OneTo(length(b))
+        α::Number = true, β::Number = false, r = Base.OneTo(2 * numpairs(b))
     )
     length(y) == length(r) || throw(DimensionMismatch())
+    iseven(length(r)) || throw(ArgumentError("index range `r` must cover complete symplectic pairs"))
     if get_num_threads() > 1
         @sync for J in splitrange(1:length(r), get_num_threads())
             Threads.@spawn for j in $J
@@ -148,9 +150,9 @@ function skeworthogonalize!!(
 end
 
 function reskeworthogonalize!!(
-        v::T, b::SymplecticBasis{T}, x::AbstractVector, alg::ClassicalSymplecticGramSchmidt
+        v::T, b::SymplecticBasis{T}, x::AbstractVector, alg::ClassicalSymplecticGramSchmidt,
+        s::AbstractVector = similar(x)
     ) where {T}
-    s = similar(x) ## EXTRA ALLOCATION
     (v, s) = skeworthogonalize!!(v, b, s, alg)
     x .+= s
     return (v, x)
@@ -171,10 +173,13 @@ function skeworthogonalize!!(
     nold = norm(v)
     (v, x) = skeworthogonalize!!(v, b, x, csgs)
     nnew = norm(v)
-    while eps(one(nnew)) < nnew < alg.η * nold
-        nold = nnew
-        (v, x) = reskeworthogonalize!!(v, b, x, csgs)
-        nnew = norm(v)
+    if eps(one(nnew)) < nnew < alg.η * nold
+        s = similar(x) # scratch storage shared by all reorthogonalization passes
+        while eps(one(nnew)) < nnew < alg.η * nold
+            nold = nnew
+            (v, x) = reskeworthogonalize!!(v, b, x, csgs, s)
+            nnew = norm(v)
+        end
     end
     return (v, x)
 end
@@ -256,16 +261,17 @@ skeworthonormalize(v, args...) = skeworthonormalize!!(scale(v, VectorInterface.O
 
 function skeworthonormalize!!(v, b::SymplecticBasis, x::AbstractVector, alg::SkewOrthogonalizer)
     out = skeworthogonalize!!(v, b, x, alg)
+    # rebind to the returned vector, as `!!` methods may return a new object
+    v = first(out)
     if iseven(length(b))
         # Adding odd vector: normalize with standard norm / don't normalize if ESR3m
         β = alg.esr == ESR3m ? one(scalartype(v)) : norm(v)
-        v = scale!!(v, inv(β))
     else
         # Adding even vector: scale so that ω(partner, v) = 1
         # The partner is the last vector in b (the odd vector of the current pair)
         β = symplecticform(last(b), v)
-        v = scale!!(v, inv(β))
     end
+    v = scale!!(v, inv(β))
     return (v, β, Base.tail(out)...)
 end
 
@@ -286,7 +292,7 @@ skew-orthogonalization ensures:
 - `ω(u_{2m}, w) = 0` for all `m`
 
 When the basis has odd length (i.e. after an odd vector has been added but before its even
-partner), the behaviour depends on the [`ESR`](@ref) variant of the algorithm:
+partner), the behavior depends on the [`ESR`](@ref) variant of the algorithm:
 - `ESR1`: no additional projection is performed against the unpaired odd vector.
 - `ESR2`: additionally projects `v` against the unpaired odd vector using the standard
   inner product, i.e. `x[end] = inner(last(b), v)` and `w = v - x[end] * last(b)`. This
