@@ -1,5 +1,5 @@
 """
-    mutable struct ArnoldiFactorization{T,S,B} <: KrylovFactorization{T,S}
+    mutable struct ArnoldiFactorization{T,S} <: KrylovFactorization{T,S}
 
 Structure to store an Arnoldi factorization of a linear map `A` of the form
 
@@ -9,15 +9,15 @@ A * V = V * B + r * b'
 
 For a given Arnoldi factorization `fact` of length `k = length(fact)`, the basis `V` is
 obtained via [`basis(fact)`](@ref basis) and is an instance of [`OrthonormalBasis{T}`](@ref
-Basis) or [`SymplecticBasis{T}`](@ref) (when using a [`SkewOrthogonalizer`](@ref)), with
-also `length(V) == k` and where `T` denotes the type of vector like objects used in the
-problem. The Rayleigh quotient `B` is obtained as [`rayleighquotient(fact)`](@ref) and is
-of type [`B::PackedHessenberg{S<:Number}`](@ref PackedHessenberg) with `size(B) == (k,k)`.
-The residual `r` is obtained as [`residual(fact)`](@ref) and is of type `T`. One can also
-query [`normres(fact)`](@ref) to obtain `norm(r)`, the norm of the residual. The vector `b`
-has no dedicated name but can be obtained via [`rayleighextension(fact)`](@ref). It takes
-the default value ``e_k``, i.e. the unit vector of all zeros and a one in the last entry,
-which is represented using [`SimpleBasisVector`](@ref).
+Basis), with also `length(V) == k` and where `T` denotes the type of vector like objects
+used in the problem. The Rayleigh quotient `B` is obtained as
+[`rayleighquotient(fact)`](@ref) and is of type [`B::PackedHessenberg{S<:Number}`](@ref
+PackedHessenberg) with `size(B) == (k,k)`. The residual `r` is obtained as
+[`residual(fact)`](@ref) and is of type `T`. One can also query [`normres(fact)`](@ref) to
+obtain `norm(r)`, the norm of the residual. The vector `b` has no dedicated name but can be
+obtained via [`rayleighextension(fact)`](@ref). It takes the default value ``e_k``, i.e. the
+unit vector of all zeros and a one in the last entry, which is represented using
+[`SimpleBasisVector`](@ref).
 
 An Arnoldi factorization `fact` can be destructured as `V, B, r, nr, b = fact` with
 `nr = norm(r)`.
@@ -26,30 +26,84 @@ An Arnoldi factorization `fact` can be destructured as `V, B, r, nr, b = fact` w
 See also [`ArnoldiIterator`](@ref) for an iterator that constructs a progressively expanding
 Arnoldi factorizations of a given linear map and a starting vector. See
 [`LanczosFactorization`](@ref) and [`LanczosIterator`](@ref) for a Krylov factorization that
-is optimized for real symmetric or complex hermitian linear maps.
+is optimized for real symmetric or complex hermitian linear maps, and
+[`SymplecticArnoldiFactorization`](@ref) for the analogous factorization built on a
+symplectic (Darboux) basis.
 """
-mutable struct ArnoldiFactorization{T, S, B <: Basis{T}} <: KrylovFactorization{T, S}
+mutable struct ArnoldiFactorization{T, S} <: KrylovFactorization{T, S}
     k::Int # current Krylov dimension
-    V::B # basis of length k (OrthonormalBasis or SymplecticBasis)
+    V::OrthonormalBasis{T} # basis of length k
     H::Vector{S} # stores the Hessenberg matrix in packed form
     r::T # residual
 end
 
-Base.length(F::ArnoldiFactorization) = F.k
-Base.sizehint!(F::ArnoldiFactorization, n) = begin
+"""
+    mutable struct SymplecticArnoldiFactorization{T,S} <: KrylovFactorization{T,S}
+
+Structure to store a symplectic Arnoldi factorization of a linear map `A` of the form
+
+```julia
+A * V = V * B + r * b'
+```
+
+For a given symplectic Arnoldi factorization `fact` of length `k = length(fact)`, the basis
+`V` is obtained via [`basis(fact)`](@ref basis) and is an instance of
+[`SymplecticBasis{T}`](@ref), with also `length(V) == k` and where `T` denotes the type of
+vector like objects used in the problem. The Rayleigh quotient `B` is obtained as
+[`rayleighquotient(fact)`](@ref) and is of type [`B::PackedHessenberg{S<:Number}`](@ref
+PackedHessenberg) with `size(B) == (k,k)`. The residual `r` is obtained as
+[`residual(fact)`](@ref) and is of type `T`. The vector `b` has no dedicated name but can
+be obtained via [`rayleighextension(fact)`](@ref). It takes the default value ``e_k``, i.e.
+the unit vector of all zeros and a one in the last entry, which is represented using
+[`SimpleBasisVector`](@ref).
+
+As for `ArnoldiFactorization`, [`normres(fact)`](@ref) returns the scaling factor that
+relates the residual `r` to the next basis vector. However, unlike in the orthonormal
+case, this value is not necessarily a norm: when the next basis vector completes a
+symplectic pair (i.e. `k` is odd), it is the value of the symplectic form
+`symplecticform(V[k], A * V[k])` after skew-orthogonalization, which can be negative (or
+complex), as the even vectors must be scaled such that
+`symplecticform(u_{2m-1}, u_{2m}) = +1`.
+
+A symplectic Arnoldi factorization `fact` can be destructured as `V, B, r, nr, b = fact`
+with `nr = normres(fact)`.
+
+A `SymplecticArnoldiFactorization` is constructed by using an [`ArnoldiIterator`](@ref)
+with a [`SkewOrthogonalizer`](@ref) algorithm, which requires the symplectic form
+[`symplecticform`](@ref) to be defined for the vector type; see [`SymplecticBasis`](@ref)
+for details.
+
+`SymplecticArnoldiFactorization` is mutable because it can [`expand!`](@ref) or
+[`shrink!`](@ref). See also [`ArnoldiFactorization`](@ref) for the standard Arnoldi
+factorization with an orthonormal basis.
+"""
+mutable struct SymplecticArnoldiFactorization{T, S} <: KrylovFactorization{T, S}
+    k::Int # current Krylov dimension
+    V::SymplecticBasis{T} # basis of length k
+    H::Vector{S} # stores the Hessenberg matrix in packed form
+    r::T # residual
+end
+
+Base.length(F::Union{ArnoldiFactorization, SymplecticArnoldiFactorization}) = F.k
+Base.sizehint!(F::Union{ArnoldiFactorization, SymplecticArnoldiFactorization}, n) = begin
     sizehint!(F.V, n)
     sizehint!(F.H, (n * n + 3 * n) >> 1)
     return F
 end
-Base.eltype(F::ArnoldiFactorization) = eltype(typeof(F))
+Base.eltype(F::Union{ArnoldiFactorization, SymplecticArnoldiFactorization}) = eltype(typeof(F))
 Base.eltype(::Type{<:ArnoldiFactorization{<:Any, S}}) where {S} = S
+Base.eltype(::Type{<:SymplecticArnoldiFactorization{<:Any, S}}) where {S} = S
 
-basis(F::ArnoldiFactorization) = F.V
-rayleighquotient(F::ArnoldiFactorization) = PackedHessenberg(F.H, F.k)
-residual(F::ArnoldiFactorization) = F.r
-@inbounds normres(F::ArnoldiFactorization{<:Any, <:Any, <:OrthonormalBasis}) = abs(F.H[end])
-@inbounds normres(F::ArnoldiFactorization{<:Any, <:Any, <:SymplecticBasis}) = F.H[end]
-rayleighextension(F::ArnoldiFactorization) = SimpleBasisVector(F.k, F.k)
+basis(F::Union{ArnoldiFactorization, SymplecticArnoldiFactorization}) = F.V
+function rayleighquotient(F::Union{ArnoldiFactorization, SymplecticArnoldiFactorization})
+    return PackedHessenberg(F.H, F.k)
+end
+residual(F::Union{ArnoldiFactorization, SymplecticArnoldiFactorization}) = F.r
+@inbounds normres(F::ArnoldiFactorization) = abs(F.H[end])
+@inbounds normres(F::SymplecticArnoldiFactorization) = F.H[end]
+function rayleighextension(F::Union{ArnoldiFactorization, SymplecticArnoldiFactorization})
+    return SimpleBasisVector(F.k, F.k)
+end
 
 # Arnoldi iteration for constructing the orthonormal basis of a Krylov subspace.
 """
@@ -67,6 +121,10 @@ The argument `f` can be a matrix, or a function accepting a single argument `v`,
 The optional argument `orth` specifies which [`Orthogonalizer`](@ref) or
 [`SkewOrthogonalizer`](@ref) to be used. The default value in [`KrylovDefaults`](@ref) is
 to use [`ModifiedGramSchmidtIR`](@ref), which possibly uses reorthogonalization steps.
+With an `Orthogonalizer`, the generated factorizations are of type
+[`ArnoldiFactorization`](@ref) and use an [`OrthonormalBasis`](@ref Basis); with a
+`SkewOrthogonalizer`, they are of type [`SymplecticArnoldiFactorization`](@ref) and use a
+[`SymplecticBasis`](@ref).
 
 When iterating over an instance of `ArnoldiIterator`, the values being generated are
 instances of [`ArnoldiFactorization`](@ref), which can be immediately destructured into a
@@ -133,21 +191,16 @@ function Base.iterate(iter::ArnoldiIterator, state)
     end
 end
 
-function initialize(iter::ArnoldiIterator; verbosity::Int = KrylovDefaults.verbosity[])
+function initialize(
+        iter::ArnoldiIterator{<:Any, <:Any, <:Orthogonalizer};
+        verbosity::Int = KrylovDefaults.verbosity[]
+    )
     # initialize without using eltype
     x₀ = iter.x₀
-    if iter.orth isa Orthogonalizer || iter.orth.esr != ESR3m
-        β₀ = norm(x₀)
-    else
-        β₀ = one(scalartype(x₀))
-    end
+    β₀ = norm(x₀)
     iszero(β₀) && throw(ArgumentError("initial vector should not have norm zero"))
     Ax₀ = apply(iter.operator, x₀)
-    if iter.orth isa Orthogonalizer
-        α = inner(x₀, Ax₀) / (β₀ * β₀)
-    else
-        α = symplecticform(x₀, Ax₀) / (β₀ * β₀)
-    end
+    α = inner(x₀, Ax₀) / (β₀ * β₀)
     T = typeof(α) # scalar type of the Rayleigh quotient
     # this line determines the vector type that we will henceforth use
     # vector scalar type can be different from `T`, e.g. for real inner products
@@ -157,46 +210,67 @@ function initialize(iter::ArnoldiIterator; verbosity::Int = KrylovDefaults.verbo
     else
         r = scale!!(Ax₀, 1 / β₀)
     end
-    if iter.orth isa Orthogonalizer
-        βold = norm(r)
-        r = add!!(r, v, -α)
+    βold = norm(r)
+    r = add!!(r, v, -α)
+    β = norm(r)
+    # possibly reorthogonalize
+    if iter.orth isa Union{ClassicalGramSchmidt2, ModifiedGramSchmidt2}
+        dα = inner(v, r)
+        α += dα
+        r = add!!(r, v, -dα)
         β = norm(r)
-        # possibly reorthogonalize
-        if iter.orth isa Union{ClassicalGramSchmidt2, ModifiedGramSchmidt2}
+    elseif iter.orth isa Union{ClassicalGramSchmidtIR, ModifiedGramSchmidtIR}
+        while eps(one(β)) < β < iter.orth.η * βold
+            βold = β
             dα = inner(v, r)
             α += dα
             r = add!!(r, v, -dα)
             β = norm(r)
-        elseif iter.orth isa Union{ClassicalGramSchmidtIR, ModifiedGramSchmidtIR}
-            while eps(one(β)) < β < iter.orth.η * βold
-                βold = β
-                dα = inner(v, r)
-                α += dα
-                r = add!!(r, v, -dα)
-                β = norm(r)
-            end
-        end
-        V = OrthonormalBasis([v])
-        H = T[α, β]
-    else
-        iszero(α) && throw(ArgumentError("initial vector and its image are symplectically orthogonal"))
-        V = SymplecticBasis([v])
-        if iter.orth.esr == ESR2
-            r12 = inner(v, r)
-            r = add!!(r, v, -r12)
-            H = T[r12, α]
-        else
-            H = T[zero(α), α]
         end
     end
+    V = OrthonormalBasis([v])
+    H = T[α, β]
     if verbosity > EACHITERATION_LEVEL
         @info "Arnoldi initiation at dimension 1: subspace normres = $(normres2string(β))"
     end
     return ArnoldiFactorization(1, V, H, r)
 end
+function initialize(
+        iter::ArnoldiIterator{<:Any, <:Any, <:SkewOrthogonalizer};
+        verbosity::Int = KrylovDefaults.verbosity[]
+    )
+    # initialize without using eltype
+    x₀ = iter.x₀
+    β₀ = iter.orth.esr == ESR3m ? one(scalartype(x₀)) : norm(x₀)
+    iszero(β₀) && throw(ArgumentError("initial vector should not have norm zero"))
+    Ax₀ = apply(iter.operator, x₀)
+    α = symplecticform(x₀, Ax₀) / (β₀ * β₀)
+    iszero(α) && throw(ArgumentError("initial vector and its image are symplectically orthogonal"))
+    T = typeof(α) # scalar type of the Rayleigh quotient
+    # this line determines the vector type that we will henceforth use
+    # vector scalar type can be different from `T`, e.g. for real inner products
+    v = add!!(scale(Ax₀, zero(α)), x₀, 1 / β₀)
+    if typeof(Ax₀) != typeof(v)
+        r = add!!(zerovector(v), Ax₀, 1 / β₀)
+    else
+        r = scale!!(Ax₀, 1 / β₀)
+    end
+    V = SymplecticBasis([v])
+    if iter.orth.esr == ESR2
+        r12 = inner(v, r)
+        r = add!!(r, v, -r12)
+        H = T[r12, α]
+    else
+        H = T[zero(α), α]
+    end
+    if verbosity > EACHITERATION_LEVEL
+        @info "Arnoldi initiation at dimension 1: subspace normres = $(normres2string(α))"
+    end
+    return SymplecticArnoldiFactorization(1, V, H, r)
+end
 
 function initialize!(
-        iter::ArnoldiIterator, state::ArnoldiFactorization;
+        iter::ArnoldiIterator{<:Any, <:Any, <:Orthogonalizer}, state::ArnoldiFactorization;
         verbosity::Int = KrylovDefaults.verbosity[]
     )
     x₀ = iter.x₀
@@ -206,38 +280,53 @@ function initialize!(
     end
     H = empty!(state.H)
 
-    if iter.orth isa Orthogonalizer || iter.orth.esr != ESR3m
-        β₀ = norm(x₀)
-    else
-        β₀ = one(scalartype(x₀))
-    end
-    V[1] = scale!!(V[1], x₀, 1 / β₀)
+    V[1] = scale!!(V[1], x₀, 1 / norm(x₀))
     w = apply(iter.operator, V[1])
-    if iter.orth isa Orthogonalizer
-        r, α = orthogonalize!!(w, V[1], iter.orth)
-        β = norm(r)
-        push!(H, α, β)
-    else
-        α = symplecticform(V[1], w)
-        iszero(α) && throw(ArgumentError("initial vector and its image are symplectically orthogonal"))
-        r = w
-        if iter.orth.esr == ESR2
-            r12 = inner(V[1], r)
-            r = add!!(r, V[1], -r12)
-            push!(H, r12, α)
-        else
-            push!(H, zero(α), α)
-        end
-    end
+    r, α = orthogonalize!!(w, V[1], iter.orth)
+    β = norm(r)
     state.k = 1
+    push!(H, α, β)
     state.r = r
     if verbosity > EACHITERATION_LEVEL
         @info "Arnoldi initiation at dimension 1: subspace normres = $(normres2string(β))"
     end
     return state
 end
+function initialize!(
+        iter::ArnoldiIterator{<:Any, <:Any, <:SkewOrthogonalizer},
+        state::SymplecticArnoldiFactorization;
+        verbosity::Int = KrylovDefaults.verbosity[]
+    )
+    x₀ = iter.x₀
+    V = state.V
+    while length(V) > 1
+        pop!(V)
+    end
+    H = empty!(state.H)
+
+    β₀ = iter.orth.esr == ESR3m ? one(scalartype(x₀)) : norm(x₀)
+    V[1] = scale!!(V[1], x₀, 1 / β₀)
+    w = apply(iter.operator, V[1])
+    α = symplecticform(V[1], w)
+    iszero(α) && throw(ArgumentError("initial vector and its image are symplectically orthogonal"))
+    r = w
+    if iter.orth.esr == ESR2
+        r12 = inner(V[1], r)
+        r = add!!(r, V[1], -r12)
+        push!(H, r12, α)
+    else
+        push!(H, zero(α), α)
+    end
+    state.k = 1
+    state.r = r
+    if verbosity > EACHITERATION_LEVEL
+        @info "Arnoldi initiation at dimension 1: subspace normres = $(normres2string(α))"
+    end
+    return state
+end
+
 function expand!(
-        iter::ArnoldiIterator, state::ArnoldiFactorization;
+        iter::ArnoldiIterator{<:Any, <:Any, <:Orthogonalizer}, state::ArnoldiFactorization;
         verbosity::Int = KrylovDefaults.verbosity[]
     )
     state.k += 1
@@ -245,11 +334,7 @@ function expand!(
     V = state.V
     H = state.H
     r = state.r
-    if iter.orth isa Orthogonalizer || iter.orth.esr == ESR3m
-        β = normres(state)
-    else
-        β = iseven(k) ? normres(state) : norm(r)
-    end
+    β = normres(state)
     push!(V, scale(r, 1 / β))
     m = length(H)
     resize!(H, m + k + 1)
@@ -261,6 +346,29 @@ function expand!(
     end
     return state
 end
+function expand!(
+        iter::ArnoldiIterator{<:Any, <:Any, <:SkewOrthogonalizer},
+        state::SymplecticArnoldiFactorization;
+        verbosity::Int = KrylovDefaults.verbosity[]
+    )
+    state.k += 1
+    k = state.k
+    V = state.V
+    H = state.H
+    r = state.r
+    β = (iseven(k) || iter.orth.esr == ESR3m) ? normres(state) : norm(r)
+    push!(V, scale(r, 1 / β))
+    m = length(H)
+    resize!(H, m + k + 1)
+    r, β = arnoldirecurrence!!(iter.operator, V, view(H, (m + 1):(m + k)), iter.orth)
+    H[m + k + 1] = β
+    state.r = r
+    if verbosity > EACHITERATION_LEVEL
+        @info "Arnoldi expansion to dimension $k: subspace normres = $(normres2string(β))"
+    end
+    return state
+end
+
 function shrink!(state::ArnoldiFactorization, k; verbosity::Int = KrylovDefaults.verbosity[])
     length(state) <= k && return state
     V = state.V
@@ -271,11 +379,27 @@ function shrink!(state::ArnoldiFactorization, k; verbosity::Int = KrylovDefaults
     r = pop!(V)
     resize!(H, (k * k + 3 * k) >> 1)
     state.k = k
-    if V isa OrthonormalBasis
-        β = normres(state)
-    else
-        β = iseven(k) ? normres(state) : norm(r)
+    β = normres(state)
+    if verbosity > EACHITERATION_LEVEL
+        @info "Arnoldi reduction to dimension $k: subspace normres = $(normres2string(β))"
     end
+    state.r = scale!!(r, β)
+    return state
+end
+function shrink!(
+        state::SymplecticArnoldiFactorization, k;
+        verbosity::Int = KrylovDefaults.verbosity[]
+    )
+    length(state) <= k && return state
+    V = state.V
+    H = state.H
+    while length(V) > k + 1
+        pop!(V)
+    end
+    r = pop!(V)
+    resize!(H, (k * k + 3 * k) >> 1)
+    state.k = k
+    β = iseven(k) ? normres(state) : norm(r)
     if verbosity > EACHITERATION_LEVEL
         @info "Arnoldi reduction to dimension $k: subspace normres = $(normres2string(β))"
     end

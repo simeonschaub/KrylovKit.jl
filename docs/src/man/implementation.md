@@ -122,14 +122,16 @@ dense linear algebra dependencies.
 ## Factorization types
 The central ingredient in a Krylov based algorithm is a Krylov factorization or
 decomposition of a linear map. Such partial factorizations are represented as a
-`KrylovFactorization`, of which `LanczosFactorization`, `BlockLanczosFactorization` and `ArnoldiFactorization` are three
-concrete implementations:
+`KrylovFactorization`, of which `LanczosFactorization`, `BlockLanczosFactorization`,
+`ArnoldiFactorization` and `SymplecticArnoldiFactorization` are four concrete
+implementations:
 
 ```@docs
 KrylovKit.KrylovFactorization
 KrylovKit.LanczosFactorization
 KrylovKit.BlockLanczosFactorization
 KrylovKit.ArnoldiFactorization
+KrylovKit.SymplecticArnoldiFactorization
 KrylovKit.GKLFactorization
 ```
 

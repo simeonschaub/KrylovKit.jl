@@ -14,8 +14,8 @@ as `v[]`.
 
 # Usage with SkewOrthogonalizer / Symplectic Arnoldi
 
-In order to use a [`SkewOrthogonalizer`](@ref) algorithm in an
-[`ArnoldiFactorization`](@ref), the vector type used must support the
+In order to use a [`SkewOrthogonalizer`](@ref) algorithm to construct a
+[`SymplecticArnoldiFactorization`](@ref), the vector type used must support the
 [`symplecticform`](@ref) function. There are two ways to achieve this:
 
 1. **Define `KrylovKit.symplecticform(v, w)`** directly for your vector type. For
